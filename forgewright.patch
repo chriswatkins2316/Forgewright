@@ -52,10 +52,10 @@ index 6246533..fd87419 100644
 +-keepclassmembers class * { @android.webkit.JavascriptInterface <methods>; }
 diff --git a/forge-gui-android/src/forge/app/DeckwrightActivity.java b/forge-gui-android/src/forge/app/DeckwrightActivity.java
 new file mode 100644
-index 0000000..2462c10
+index 0000000..568c105
 --- /dev/null
 +++ b/forge-gui-android/src/forge/app/DeckwrightActivity.java
-@@ -0,0 +1,186 @@
+@@ -0,0 +1,201 @@
 +package forge.app;
 +
 +import android.Manifest;
@@ -188,7 +188,22 @@ index 0000000..2462c10
 +    @Override
 +    public void onBackPressed() {
 +        if (web != null && web.canGoBack()) web.goBack();
-+        else super.onBackPressed();
++        else backToForge();
++    }
++
++    /**
++     * Forge's main screen runs in its own task (launchMode singleInstance), so this screen sits in a separate task.
++     * Finishing it alone would drop to the phone's home screen, so bring Forge to the front first.
++     */
++    private void backToForge() {
++        try {
++            Intent forge = new Intent(this, Main.class);
++            forge.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
++            startActivity(forge);
++        } catch (Exception e) {
++            e.printStackTrace();
++        }
++        finish();
 +    }
 +
 +    @Override
@@ -234,12 +249,12 @@ index 0000000..2462c10
 +            });
 +            runOnUiThread(() -> {
 +                Toast.makeText(DeckwrightActivity.this, "Sending " + name + " to Forge…", Toast.LENGTH_SHORT).show();
-+                finish();   // back to Forge, where the deck has just been added
++                backToForge();   // back to Forge, where the deck has just been added
 +            });
 +        }
 +
 +        @JavascriptInterface
-+        public void close() { runOnUiThread(DeckwrightActivity.this::finish); }
++        public void close() { runOnUiThread(DeckwrightActivity.this::backToForge); }
 +    }
 +}
 diff --git a/forge-gui-android/src/forge/app/Main.java b/forge-gui-android/src/forge/app/Main.java
@@ -310,6 +325,20 @@ index 360b4a5..29cb04a 100644
          baseButtonCount = buttons.size();
      }
  
+diff --git a/forge-gui/src/main/java/forge/deck/DeckProxy.java b/forge-gui/src/main/java/forge/deck/DeckProxy.java
+index 32e1cbb..bb88fcd 100644
+--- a/forge-gui/src/main/java/forge/deck/DeckProxy.java
++++ b/forge-gui/src/main/java/forge/deck/DeckProxy.java
+@@ -388,6 +388,9 @@ public class DeckProxy implements InventoryItem {
+     }
+ 
+     public String getFormatsString() {
++        // Forgewright: decks from Deckwright carry the format they were built for (Forge leaves out Arena formats like Historic)
++        String deckwrightFormat = getDeck() == null ? null : getEventTag(getDeck(), "Format");
++        if (deckwrightFormat != null && !deckwrightFormat.isEmpty()) return deckwrightFormat;
+         Set<GameFormat> formats = getFormats();
+         if (formats.size() > 1)
+             return StringUtils.join(IterableUtil.transform(formats, GameFormat::getName), ", ");
 diff --git a/forge-gui/src/main/java/forge/interfaces/IDeviceAdapter.java b/forge-gui/src/main/java/forge/interfaces/IDeviceAdapter.java
 index 94f4f05..ce135be 100644
 --- a/forge-gui/src/main/java/forge/interfaces/IDeviceAdapter.java
