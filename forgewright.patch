@@ -52,10 +52,10 @@ index 6246533..fd87419 100644
 +-keepclassmembers class * { @android.webkit.JavascriptInterface <methods>; }
 diff --git a/forge-gui-android/src/forge/app/DeckwrightActivity.java b/forge-gui-android/src/forge/app/DeckwrightActivity.java
 new file mode 100644
-index 0000000..568c105
+index 0000000..68ceca4
 --- /dev/null
 +++ b/forge-gui-android/src/forge/app/DeckwrightActivity.java
-@@ -0,0 +1,201 @@
+@@ -0,0 +1,266 @@
 +package forge.app;
 +
 +import android.Manifest;
@@ -74,13 +74,20 @@ index 0000000..568c105
 +import android.webkit.WebSettings;
 +import android.webkit.WebView;
 +import android.webkit.WebViewClient;
++import android.database.Cursor;
++import android.provider.OpenableColumns;
 +import android.widget.Toast;
 +
 +import com.badlogic.gdx.Gdx;
 +
++import java.io.ByteArrayOutputStream;
++import java.io.InputStream;
++import java.nio.charset.StandardCharsets;
 +import java.util.Arrays;
 +import java.util.List;
 +import java.util.Map;
++
++import org.json.JSONObject;
 +
 +import forge.deck.Deck;
 +import forge.deck.io.DeckSerializer;
@@ -100,6 +107,8 @@ index 0000000..568c105
 +    private WebView web;
 +    private ValueCallback<Uri[]> fileCallback;
 +    private PermissionRequest pendingPermission;
++    private boolean pageReady;
++    private String sharedName, sharedText;   // a file shared to Forgewright, handed to Deckwright once the page has loaded
 +
 +    @SuppressLint("SetJavaScriptEnabled")
 +    @Override
@@ -125,6 +134,12 @@ index 0000000..568c105
 +                if (host != null && host.equals(u.getHost())) return false;   // Deckwright itself stays inside
 +                try { startActivity(new Intent(Intent.ACTION_VIEW, u)); } catch (ActivityNotFoundException ignored) { }
 +                return true;                                                     // other links open in the browser
++            }
++
++            @Override
++            public void onPageFinished(WebView view, String url) {
++                pageReady = true;
++                deliverShared();
 +            }
 +        });
 +        web.setWebChromeClient(new WebChromeClient() {
@@ -162,6 +177,56 @@ index 0000000..568c105
 +
 +        if (savedInstanceState != null) web.restoreState(savedInstanceState);
 +        else web.loadUrl(DECKWRIGHT_URL);
++        readShared(getIntent());
++    }
++
++    @Override
++    protected void onNewIntent(Intent intent) {
++        super.onNewIntent(intent);
++        setIntent(intent);
++        readShared(intent);
++    }
++
++    /** A collection CSV shared to Forgewright ("Share" or "Open with" in another app): read it, then pass it to Deckwright. */
++    private void readShared(Intent intent) {
++        if (intent == null) return;
++        Uri uri = null;
++        if (Intent.ACTION_SEND.equals(intent.getAction())) uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
++        else if (Intent.ACTION_VIEW.equals(intent.getAction())) uri = intent.getData();
++        final Uri src = uri;
++        if (src == null) {
++            String text = intent.getStringExtra(Intent.EXTRA_TEXT);
++            if (text != null && !text.trim().isEmpty()) { sharedName = "shared text"; sharedText = text; deliverShared(); }
++            return;
++        }
++        new Thread(() -> {
++            String name = "shared file";
++            try (Cursor c = getContentResolver().query(src, new String[]{ OpenableColumns.DISPLAY_NAME }, null, null, null)) {
++                if (c != null && c.moveToFirst() && c.getString(0) != null) name = c.getString(0);
++            } catch (Exception ignored) { }
++            try (InputStream in = getContentResolver().openInputStream(src)) {
++                if (in == null) throw new IllegalStateException("no data");
++                ByteArrayOutputStream out = new ByteArrayOutputStream();
++                byte[] buf = new byte[65536];
++                int n, total = 0;
++                while ((n = in.read(buf)) > 0) {
++                    total += n;
++                    if (total > 25 * 1024 * 1024) throw new IllegalStateException("the file is too big");
++                    out.write(buf, 0, n);
++                }
++                final String fname = name, text = new String(out.toByteArray(), StandardCharsets.UTF_8);
++                runOnUiThread(() -> { sharedName = fname; sharedText = text; deliverShared(); });
++            } catch (Exception e) {
++                runOnUiThread(() -> Toast.makeText(this, "Couldn't read the shared file: " + e.getMessage(), Toast.LENGTH_LONG).show());
++            }
++        }).start();
++    }
++
++    private void deliverShared() {
++        if (!pageReady || web == null || sharedText == null) return;
++        String js = "window.deckwrightReceiveFile && window.deckwrightReceiveFile(" + JSONObject.quote(sharedName) + "," + JSONObject.quote(sharedText) + ")";
++        sharedName = null; sharedText = null;
++        web.evaluateJavascript(js, null);
 +    }
 +
 +    @Override
@@ -280,7 +345,7 @@ index 28d949d..9c109da 100644
          public void requestFileAcces() {
              /* This is needed for Android 11 and upwards to have access on external storage (direct file path)
 diff --git a/forge-gui-android/src/main/AndroidManifest.xml b/forge-gui-android/src/main/AndroidManifest.xml
-index 841e223..c9fc625 100644
+index 841e223..e058119 100644
 --- a/forge-gui-android/src/main/AndroidManifest.xml
 +++ b/forge-gui-android/src/main/AndroidManifest.xml
 @@ -26,6 +26,9 @@
@@ -293,7 +358,7 @@ index 841e223..c9fc625 100644
      <uses-feature android:name="android.hardware.gamepad" android:required="false"/>
  
      <application
-@@ -61,6 +64,14 @@
+@@ -61,6 +64,32 @@
              android:theme="@style/NormalTheme"
              android:exported="false">
          </activity>
@@ -303,7 +368,25 @@ index 841e223..c9fc625 100644
 +            android:label="Deckwright"
 +            android:configChanges="density|fontScale|keyboard|keyboardHidden|layoutDirection|locale|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
 +            android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
-+            android:exported="false">
++            android:launchMode="singleTask"
++            android:exported="true">
++            <!-- share a collection CSV (untapped.gg, ManaBox) to Forgewright and Deckwright imports it -->
++            <intent-filter>
++                <action android:name="android.intent.action.SEND"/>
++                <category android:name="android.intent.category.DEFAULT"/>
++                <data android:mimeType="text/*"/>
++                <data android:mimeType="application/csv"/>
++                <data android:mimeType="application/vnd.ms-excel"/>
++                <data android:mimeType="application/octet-stream"/>
++            </intent-filter>
++            <intent-filter>
++                <action android:name="android.intent.action.VIEW"/>
++                <category android:name="android.intent.category.DEFAULT"/>
++                <data android:scheme="content"/>
++                <data android:mimeType="text/csv"/>
++                <data android:mimeType="text/comma-separated-values"/>
++                <data android:mimeType="application/csv"/>
++            </intent-filter>
 +        </activity>
          <meta-data android:name="io.sentry.dsn" android:value="https://a0b8dbad9b8a49cfa51bf65d462e8dae:b3f27d7461224cb8836eb5c6050c666c@sentry.asgardsrealm.net/2?buffer.enabled=false" />
          <meta-data android:name="io.sentry.send-default-pii" android:value="true" />
