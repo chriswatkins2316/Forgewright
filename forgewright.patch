@@ -52,10 +52,10 @@ index 6246533..fd87419 100644
 +-keepclassmembers class * { @android.webkit.JavascriptInterface <methods>; }
 diff --git a/forge-gui-android/src/forge/app/DeckwrightActivity.java b/forge-gui-android/src/forge/app/DeckwrightActivity.java
 new file mode 100644
-index 0000000..68ceca4
+index 0000000..714c600
 --- /dev/null
 +++ b/forge-gui-android/src/forge/app/DeckwrightActivity.java
-@@ -0,0 +1,266 @@
+@@ -0,0 +1,268 @@
 +package forge.app;
 +
 +import android.Manifest;
@@ -132,6 +132,8 @@ index 0000000..68ceca4
 +                Uri u = request.getUrl();
 +                String host = Uri.parse(DECKWRIGHT_URL).getHost();
 +                if (host != null && host.equals(u.getHost())) return false;   // Deckwright itself stays inside
++                String h = u.getHost();
++                if (h != null && (h.equals("wizards.com") || h.endsWith(".wizards.com"))) return false;   // Daily MTG news opens inside too (Back returns)
 +                try { startActivity(new Intent(Intent.ACTION_VIEW, u)); } catch (ActivityNotFoundException ignored) { }
 +                return true;                                                     // other links open in the browser
 +            }
